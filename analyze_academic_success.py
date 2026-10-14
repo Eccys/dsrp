@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import statistics
 import urllib.request
 from collections import Counter, defaultdict
@@ -16,6 +17,32 @@ DATASET_URL = (
 SCHOLARSHIP_MAP = {"1": "Scholarship", "0": "No scholarship", 1: "Scholarship", 0: "No scholarship"}
 ATTENDANCE_MAP = {"1": "Daytime", "0": "Evening", 1: "Daytime", 0: "Evening"}
 TARGETS = ("Dropout", "Enrolled", "Graduate")
+REQUIRED_COLUMNS = (
+    "Marital status",
+    "Daytime/evening attendance",
+    "Previous qualification (grade)",
+    "Scholarship holder",
+    "Age at enrollment",
+    "Target",
+)
+
+
+def validate_columns(rows: list[dict[str, str]], required: tuple[str, ...] = REQUIRED_COLUMNS) -> None:
+    """Validate that required dataset columns exist in the parsed rows."""
+    if not rows:
+        raise ValueError("Dataset contains no rows")
+    present = set(rows[0].keys())
+    missing = [col for col in required if col not in present]
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(missing)}")
+
+
+def add_human_readable_labels(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Populate scholarship_label and attendance_label on row dicts."""
+    for row in rows:
+        row["scholarship_label"] = SCHOLARSHIP_MAP.get(row.get("Scholarship holder", ""), "Unknown")
+        row["attendance_label"] = ATTENDANCE_MAP.get(row.get("Daytime/evening attendance", ""), "Unknown")
+    return rows
 
 
 def load_rows_from_csv_text(csv_text: str) -> list[dict[str, str]]:
@@ -27,10 +54,8 @@ def load_rows_from_csv_text(csv_text: str) -> list[dict[str, str]]:
         row = {k.strip(): (v.strip() if isinstance(v, str) else "") for k, v in raw_row.items() if k is not None}
         if not any(row.values()):
             continue
-        row["scholarship_label"] = SCHOLARSHIP_MAP.get(row.get("Scholarship holder", ""), "Unknown")
-        row["attendance_label"] = ATTENDANCE_MAP.get(row.get("Daytime/evening attendance", ""), "Unknown")
         rows.append(row)
-    return rows
+    return add_human_readable_labels(rows)
 
 
 def load_dataset(source: str | Path = DATASET_URL) -> list[dict[str, str]]:
@@ -46,8 +71,9 @@ def load_dataset(source: str | Path = DATASET_URL) -> list[dict[str, str]]:
 
 def target_distribution(rows: list[dict[str, str]]) -> dict[str, dict[str, float | int]]:
     """Compute counts and percentages for each Target category."""
-    total = len(rows)
-    counts = Counter(r.get("Target", "") for r in rows)
+    valid_rows = [r for r in rows if r.get("Target", "")]
+    total = len(valid_rows)
+    counts = Counter(r["Target"] for r in valid_rows)
     result: dict[str, dict[str, float | int]] = {}
     for target, count in counts.most_common():
         pct = round((count / total) * 100, 1) if total > 0 else 0.0
@@ -55,32 +81,57 @@ def target_distribution(rows: list[dict[str, str]]) -> dict[str, dict[str, float
     return result
 
 
-def outcome_rates_by_group(rows: list[dict[str, str]], group_col: str) -> dict[str, dict[str, float]]:
-    """Compute normalized row percentages across Dropout, Enrolled, and Graduate by group_col."""
+def compute_target_distribution(rows: list[dict[str, str]]) -> dict[str, dict[str, float | int]]:
+    """Alias for target_distribution."""
+    return target_distribution(rows)
+
+
+def compute_crosstab_counts(rows: list[dict[str, str]], group_col: str) -> dict[str, dict[str, int]]:
+    """Compute raw counts across Dropout, Enrolled, and Graduate by group_col."""
     grouped: dict[str, Counter] = defaultdict(Counter)
     for row in rows:
-        key = row.get(group_col, "Unknown")
         target = row.get("Target", "")
+        if target not in TARGETS:
+            continue
+        key = row.get(group_col, "Unknown")
         grouped[key][target] += 1
+    return {
+        key: {t: grouped[key][t] for t in TARGETS}
+        for key in sorted(grouped.keys())
+    }
 
+
+def outcome_rates_by_group(rows: list[dict[str, str]], group_col: str) -> dict[str, dict[str, float]]:
+    """Compute normalized row percentages across Dropout, Enrolled, and Graduate by group_col."""
+    counts_by_group = compute_crosstab_counts(rows, group_col)
     table: dict[str, dict[str, float]] = {}
-    for key in sorted(grouped.keys()):
-        total = sum(grouped[key].values())
+    for key, counts in counts_by_group.items():
+        total = sum(counts.values())
         table[key] = {
-            t: round((grouped[key][t] / total) * 100, 1) if total > 0 else 0.0
+            t: round((counts[t] / total) * 100, 1) if total > 0 else 0.0
             for t in TARGETS
         }
     return table
 
 
 def mean_numeric_by_target(rows: list[dict[str, str]], numeric_col: str) -> dict[str, float]:
-    """Compute the mean of a numeric column grouped by Target."""
+    """Compute the mean of a finite numeric column grouped by Target."""
     buckets: dict[str, list[float]] = defaultdict(list)
     for row in rows:
         target = row.get("Target", "")
+        if not target:
+            continue
         raw_val = row.get(numeric_col, "")
         try:
-            buckets[target].append(float(raw_val))
+            val = float(raw_val)
         except (TypeError, ValueError):
             continue
+        if math.isfinite(val):
+            buckets[target].append(val)
     return {target: round(statistics.mean(vals), 2) for target, vals in sorted(buckets.items()) if vals}
+
+
+def summarize_numeric_by_target(rows: list[dict[str, str]], numeric_col: str) -> dict[str, float]:
+    """Alias for mean_numeric_by_target."""
+    return mean_numeric_by_target(rows, numeric_col)
+
