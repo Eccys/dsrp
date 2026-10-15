@@ -137,13 +137,25 @@ def test_load_dataset_local_and_remote(tmp_path, monkeypatch):
 
 def test_empty_input_and_validation_edge_cases():
     assert load_rows_from_csv_text("") == []
+    assert load_rows_from_csv_text("   \n\r\n  ") == []
+    assert len(load_rows_from_csv_text("\n\r\n" + SAMPLE_CSV)) == 4
     assert target_distribution([]) == {}
     assert outcome_rates_by_group([], "scholarship_label") == {}
     assert mean_numeric_by_target([], "Age at enrollment") == {}
+
+    # Booleans should not be coerced to 1/0 in labels or numeric means
+    bool_rows = [{"Scholarship holder": True, "Daytime/evening attendance": False, "Age at enrollment": True, "Target": "Dropout"}]
+    add_human_readable_labels(bool_rows)
+    assert bool_rows[0]["scholarship_label"] == "Unknown"
+    assert bool_rows[0]["attendance_label"] == "Unknown"
+    assert mean_numeric_by_target(bool_rows, "Age at enrollment") == {}
 
     with pytest.raises(ValueError, match="no rows"):
         validate_columns([])
     with pytest.raises(ValueError, match="Missing required columns"):
         validate_columns([{"Target": "Dropout"}])
+    valid_rows = load_rows_from_csv_text(SAMPLE_CSV)
+    with pytest.raises(ValueError, match="Missing required columns"):
+        validate_columns([valid_rows[0], {"Target": "Dropout"}])
 
 
