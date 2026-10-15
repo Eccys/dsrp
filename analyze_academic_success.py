@@ -40,8 +40,12 @@ def validate_columns(rows: list[dict[str, str]], required: tuple[str, ...] = REQ
 def add_human_readable_labels(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     """Populate scholarship_label and attendance_label on row dicts."""
     for row in rows:
-        row["scholarship_label"] = SCHOLARSHIP_MAP.get(row.get("Scholarship holder", ""), "Unknown")
-        row["attendance_label"] = ATTENDANCE_MAP.get(row.get("Daytime/evening attendance", ""), "Unknown")
+        raw_sch = row.get("Scholarship holder", "")
+        sch_key = raw_sch.strip() if isinstance(raw_sch, str) else raw_sch
+        raw_att = row.get("Daytime/evening attendance", "")
+        att_key = raw_att.strip() if isinstance(raw_att, str) else raw_att
+        row["scholarship_label"] = SCHOLARSHIP_MAP.get(sch_key, "Unknown")
+        row["attendance_label"] = ATTENDANCE_MAP.get(att_key, "Unknown")
     return rows
 
 
@@ -69,11 +73,17 @@ def load_dataset(source: str | Path = DATASET_URL) -> list[dict[str, str]]:
     return load_rows_from_csv_text(text)
 
 
+def _valid_target(row: dict[str, str]) -> str | None:
+    raw = row.get("Target", "")
+    target = raw.strip() if isinstance(raw, str) else str(raw or "").strip()
+    return target if target in TARGETS else None
+
+
 def target_distribution(rows: list[dict[str, str]]) -> dict[str, dict[str, float | int]]:
-    """Compute counts and percentages for each Target category."""
-    valid_rows = [r for r in rows if r.get("Target", "")]
-    total = len(valid_rows)
-    counts = Counter(r["Target"] for r in valid_rows)
+    """Compute counts and percentages for each valid Target category."""
+    targets = [t for r in rows if (t := _valid_target(r)) is not None]
+    total = len(targets)
+    counts = Counter(targets)
     result: dict[str, dict[str, float | int]] = {}
     for target, count in counts.most_common():
         pct = round((count / total) * 100, 1) if total > 0 else 0.0
@@ -90,10 +100,11 @@ def compute_crosstab_counts(rows: list[dict[str, str]], group_col: str) -> dict[
     """Compute raw counts across Dropout, Enrolled, and Graduate by group_col."""
     grouped: dict[str, Counter] = defaultdict(Counter)
     for row in rows:
-        target = row.get("Target", "")
-        if target not in TARGETS:
+        target = _valid_target(row)
+        if target is None:
             continue
-        key = row.get(group_col, "Unknown")
+        raw_key = row.get(group_col)
+        key = str(raw_key).strip() if raw_key is not None and str(raw_key).strip() != "" else "Unknown"
         grouped[key][target] += 1
     return {
         key: {t: grouped[key][t] for t in TARGETS}
@@ -115,11 +126,11 @@ def outcome_rates_by_group(rows: list[dict[str, str]], group_col: str) -> dict[s
 
 
 def mean_numeric_by_target(rows: list[dict[str, str]], numeric_col: str) -> dict[str, float]:
-    """Compute the mean of a finite numeric column grouped by Target."""
+    """Compute the mean of a finite numeric column grouped by valid Target."""
     buckets: dict[str, list[float]] = defaultdict(list)
     for row in rows:
-        target = row.get("Target", "")
-        if not target:
+        target = _valid_target(row)
+        if target is None:
             continue
         raw_val = row.get(numeric_col, "")
         try:
@@ -134,4 +145,5 @@ def mean_numeric_by_target(rows: list[dict[str, str]], numeric_col: str) -> dict
 def summarize_numeric_by_target(rows: list[dict[str, str]], numeric_col: str) -> dict[str, float]:
     """Alias for mean_numeric_by_target."""
     return mean_numeric_by_target(rows, numeric_col)
+
 
