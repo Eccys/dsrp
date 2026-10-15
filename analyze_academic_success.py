@@ -28,10 +28,10 @@ REQUIRED_COLUMNS = (
 
 
 def validate_columns(rows: list[dict[str, str]], required: tuple[str, ...] = REQUIRED_COLUMNS) -> None:
-    """Validate that required dataset columns exist in the parsed rows."""
+    """Validate that required dataset columns exist in all parsed rows."""
     if not rows:
         raise ValueError("Dataset contains no rows")
-    present = set(rows[0].keys())
+    present = set(rows[0].keys()).intersection(*(r.keys() for r in rows[1:]))
     missing = [col for col in required if col not in present]
     if missing:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
@@ -44,14 +44,14 @@ def add_human_readable_labels(rows: list[dict[str, str]]) -> list[dict[str, str]
         sch_key = raw_sch.strip() if isinstance(raw_sch, str) else raw_sch
         raw_att = row.get("Daytime/evening attendance", "")
         att_key = raw_att.strip() if isinstance(raw_att, str) else raw_att
-        row["scholarship_label"] = SCHOLARSHIP_MAP.get(sch_key, "Unknown")
-        row["attendance_label"] = ATTENDANCE_MAP.get(att_key, "Unknown")
+        row["scholarship_label"] = "Unknown" if isinstance(sch_key, bool) else SCHOLARSHIP_MAP.get(sch_key, "Unknown")
+        row["attendance_label"] = "Unknown" if isinstance(att_key, bool) else ATTENDANCE_MAP.get(att_key, "Unknown")
     return rows
 
 
 def load_rows_from_csv_text(csv_text: str) -> list[dict[str, str]]:
     """Parse semicolon-delimited student academic success CSV text into stripped row dicts."""
-    clean_text = csv_text.lstrip("\ufeff")
+    clean_text = csv_text.lstrip("\ufeff\r\n ")
     reader = csv.DictReader(io.StringIO(clean_text), delimiter=";")
     rows: list[dict[str, str]] = []
     for raw_row in reader:
@@ -133,6 +133,8 @@ def mean_numeric_by_target(rows: list[dict[str, str]], numeric_col: str) -> dict
         if target is None:
             continue
         raw_val = row.get(numeric_col, "")
+        if isinstance(raw_val, bool):
+            continue
         try:
             val = float(raw_val)
         except (TypeError, ValueError):
